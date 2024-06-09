@@ -1,0 +1,490 @@
+﻿using NAudio;
+using NAudio.Wave;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Management;
+using System.Media;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace CWGen
+{
+    // hamlib
+    public partial class Form1 : Form
+    {
+        ushort volume = 50;
+        public string ipaddr = "192.168.1.147";
+        int port = 49152;
+        OmniVII radio = null;
+        int soundDevice = 0;
+        //private NAudio.Wave.AsioOut waveOut;
+        private NAudio.Wave.WasapiOut waveOut;
+        List<string> soundCards = new List<string>();
+        string wavPath = null;
+        WaveOut waveOut2 = null;
+        Config config = new Config();
+        AudioFileReader audioFile = null;
+        WaveOffsetStream offsetStream;
+        WaveChannel32 channelStream;
+        
+        public Form1()
+        {
+            InitializeComponent();
+            if (!Environment.MachineName.Equals("BLACK-PC"))
+            {
+                Kenwood kradio = new Kenwood();
+                if (!kradio.Connect("COM7"))
+                {
+                    MessageBox.Show("COM7 failed");
+                }
+                else
+                {
+                    //kradio.Frequency(8.0);
+                }
+            }
+            //HamLib hamLib = new HamLib();
+        }
+
+        private void soundDevices()
+        {
+            //string[] devs = AsioOut.GetDriverNames();
+            //foreach (string s in devs)
+            //{
+            //    soundCards.Add(s);
+            //}
+            //waveOut = new NAudio.Wave.WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared,300);
+            waveOut = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, 300);
+            for (int i = 0; i < WaveOut.DeviceCount; ++i)
+            {
+                WaveOutCapabilities WOC = WaveOut.GetCapabilities(i);
+                soundCards.Add(WOC.ProductName);
+            }
+            
+            waveOut.Dispose();
+            /*
+            ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT * FROM Win32_SoundDevice");
+            ManagementObjectCollection collection = searcher.Get();
+            foreach (ManagementObject obj in collection)
+            {
+                var item = new Win32_SoundDevice();
+                item.Availability = (ushort?)obj["Availability"];
+                item.Caption = (string)obj["Caption"];
+                item.ConfigManagerErrorCode = (uint?)obj["ConfigManagerErrorCode"];
+                item.ConfigManagerUserConfig = (bool?)obj["ConfigManagerUserConfig"];
+                item.CreationClassName = (string)obj["CreationClassName"];
+                item.Description = (string)obj["Description"];
+                item.DeviceID = (string)obj["DeviceID"];
+                item.DMABufferSize = (ushort?)obj["DMABufferSize"];
+                item.ErrorCleared = (bool?)obj["ErrorCleared"];
+                item.ErrorDescription = (string)obj["ErrorDescription"];
+                item.InstallDate = (DateTime?)obj["InstallDate"];
+                item.LastErrorCode = (uint?)obj["LastErrorCode"];
+                item.Manufacturer = (string)obj["Manufacturer"];
+                item.MPU401Address = (uint?)obj["MPU401Address"];
+                item.Name = (string)obj["Name"];
+                item.PNPDeviceID = (string)obj["PNPDeviceID"];
+                item.PowerManagementCapabilities = (ushort[])obj["PowerManagementCapabilities"];
+                item.PowerManagementSupported = (bool?)obj["PowerManagementSupported"];
+                item.ProductName = (string)obj["ProductName"];
+                item.Status = (string)obj["Status"];
+                item.StatusInfo = (ushort?)obj["StatusInfo"];
+                item.SystemCreationClassName = (string)obj["SystemCreationClassName"];
+                item.SystemName = (string)obj["SystemName"];
+
+                soundCards.Add(item.ProductName);
+            }
+            */
+        }
+
+
+        private void Form1_Load_1(object sender, EventArgs e)
+        {
+            this.Top = Properties.Settings.Default.Top;
+            this.Left = Properties.Settings.Default.Left;
+            //this.Width = Properties.Settings.Default.Width;
+            //this.Height = Properties.Settings.Default.Height;
+
+            wavPath = System.Environment.GetEnvironmentVariable("TEMP")+"\\sine.wav";
+            //if (!File.Exists(wavPath)) 
+            {
+                makeSineWave(500, 15010); // 500Hz a bit over 15 seconds
+            }
+            soundDevice = config.soundDevice();
+            if (soundDevice < 0)
+            {
+                config.ShowDialog();
+                //config.BringToFront();
+                //this.SendToBack();
+            }
+            waveOut2 = new WaveOut();
+            //audioFile = new AudioFileReader(wavPath);
+            audioFile = new AudioSample(wavPath);
+            waveOut2.DeviceNumber = soundDevice;
+            waveOut2.Init(audioFile);
+            waveOut2.PlaybackStopped += new EventHandler<NAudio.Wave.StoppedEventArgs>(playBackStopped);
+
+            volume = Properties.Settings.Default.Volume;
+            axWindowsMediaPlayer2.settings.volume = volume;
+            waveOut2.Volume = trackBarVolume.Value / 100.0f;
+
+            trackBarVolume.Value = volume;
+            trackBarVolume.Refresh();
+            // Sound devices
+            //soundDevices();
+        }
+        private void sineWave(int frequency=0)
+        {
+            //AsioOut asio = new AsioOut(0);
+            if (frequency > 0)
+            {
+                //waveOut = new NAudio.Wave.AsioOut(soundDevice);
+                waveOut = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, 300);
+                //waveOut = new WasapiOut()
+                //string[] devs = AsioOut.GetDriverNames();
+                var sineWaveProvider = new SineWaveProvider32();
+                sineWaveProvider.SetWaveFormat(16000, 1);
+                sineWaveProvider.Frequency = frequency;
+                sineWaveProvider.Amplitude = .20f;//volume / 32767.0f;
+                IWaveProvider mywave;
+                mywave = sineWaveProvider;
+                waveOut.Init(sineWaveProvider);
+                waveOut.Play();
+                waveOut.Dispose();
+                waveOut = null;
+            }
+            else
+            {
+                waveOut.Stop();
+                //waveOut.Dispose();
+                //waveOut = null;
+            }
+        }
+
+        private void makeSineWave(int frequency, int msDuration)
+        {
+            var mStrm = new MemoryStream();
+            BinaryWriter writer = new BinaryWriter(mStrm);
+
+            const double TAU = 2 * Math.PI;
+            int formatChunkSize = 16;
+            int headerSize = 8;
+            short formatType = 1;
+            short tracks = 1;
+            int samplesPerSecond = 8000;
+            short bitsPerSample = 16;
+            short frameSize = (short)(tracks * ((bitsPerSample + 7) / 8));
+            int bytesPerSecond = samplesPerSecond * frameSize;
+            int waveSize = 4;
+            int samples = (int)((decimal)samplesPerSecond * msDuration / 1000);
+            int dataChunkSize = samples * frameSize;
+            int fileSize = waveSize + headerSize + formatChunkSize + headerSize + dataChunkSize;
+            // var encoding = new System.Text.UTF8Encoding();
+            writer.Write(0x46464952); // = encoding.GetBytes("RIFF")
+            writer.Write(fileSize);
+            writer.Write(0x45564157); // = encoding.GetBytes("WAVE")
+            writer.Write(0x20746D66); // = encoding.GetBytes("fmt ")
+            writer.Write(formatChunkSize);
+            writer.Write(formatType);
+            writer.Write(tracks);
+            writer.Write(samplesPerSecond);
+            writer.Write(bytesPerSecond);
+            writer.Write(frameSize);
+            writer.Write(bitsPerSample);
+            writer.Write(0x61746164); // = encoding.GetBytes("data")
+            writer.Write(dataChunkSize);
+            {
+                double theta = frequency * TAU / (double)samplesPerSecond;
+                // 'volume' is UInt16 with range 0 thru Uint16.MaxValue ( = 65 535)
+                // we need 'amp' to have the range of 0 thru Int16.MaxValue ( = 32 767)
+                double amp = 40000 >> 2; // so we simply set amp = volume / 2
+                for (int step = 0; step < samples; step++)
+                {
+                    short s = (short)(amp * Math.Sin(theta * (double)step));
+                    writer.Write(s);
+                }
+            }
+
+            mStrm.Seek(0, SeekOrigin.Begin);
+            FileStream file = new FileStream(wavPath, FileMode.Create, FileAccess.Write);
+            mStrm.WriteTo(file);
+            file.Close();
+            return;
+            /*
+            WaveOut player = new WaveOut();
+            //player.DeviceNumber = 0;
+
+            player.Play();
+            new System.Media.SoundPlayer(mStrm).Play();
+
+            writer.Close();
+            mStrm.Close();
+             * */
+        }
+        void playBackStopped(object sender, EventArgs e)
+        {
+            Transmit.Text = "Transmit";
+            //waveOut2.PlaybackStopped -= new EventHandler<NAudio.Wave.StoppedEventArgs>(playBackStopped);
+            //waveOut2.Dispose();
+            //waveOut2 = null;
+        }
+        public void PlayBeep(UInt16 frequency, int msDuration, UInt16 volume = 16383)
+        {
+            int method = 1;
+            if (method == 0)
+            {
+                sineWave(1000);
+                Thread.Sleep(msDuration);
+                sineWave();
+            }
+            else if (method == 1)
+            {
+                if (Transmit.Text.Equals("Transmit"))
+                {
+                    Transmit.Text = "Stop";
+                    //waveOut2 = new WaveOut();
+                    waveOut2.Play();
+                }
+                else
+                {
+                    Transmit.Text = "Transmit";
+                    waveOut2.Stop();
+                    //waveOut2.Dispose();
+                    //waveOut2 = null;
+                }
+            }
+            else // Play WAV file
+            {
+                if (Transmit.Text.Equals("Transmit")) 
+                {
+                    string wavFilePath = @"C:\Temp\sine.wav";
+                    /*
+                    SoundPlayer player = new SoundPlayer(wavFilePath);
+                    player.Play();
+                    Thread.Sleep(3000);
+                    player.Stop();
+                    player.Dispose();
+                     * */
+                    //axWindowsMediaPlayer1.Visible = false;
+                    axWindowsMediaPlayer2.URL = wavFilePath;
+                    axWindowsMediaPlayer2.Ctlcontrols.play();
+                }
+                else
+                {
+                    axWindowsMediaPlayer2.Ctlcontrols.stop();
+                }
+            }
+           
+        }
+
+        private void axWindowsMediaPlayer1_StatusChange(object sender, AxWMPLib._WMPOCXEvents_PlayStateChangeEvent e)
+        {
+            if (e.newState == 3)
+            {
+                Transmit.Text = "Stop";
+            }
+            else
+            {
+                Transmit.Text = "Transmit";
+            }
+        }
+
+        private void Tune_Click(object sender, EventArgs e)
+        {
+            //SoundPlayer play = new SoundPlayer();
+            PlayBeep(1000, 15000, volume);
+            if (ipaddr == null)
+            {
+                Form config = new Config();
+                config.ShowDialog();
+                //ipaddr = config
+                MessageBox.Show(ipaddr);
+            }
+            if (radio == null)
+            {
+                //radio = new OmniVII("COM6");
+                radio = new OmniVII(ipaddr, port);
+            }
+            string reply = radio.test();
+            //richTextBox1.AppendText(reply + "\n");
+
+        }
+
+        private void Transmit_Click(object sender, EventArgs e)
+        {
+            if (soundDevice != config.soundDevice())
+            {
+                waveOut2.PlaybackStopped -= new EventHandler<NAudio.Wave.StoppedEventArgs>(playBackStopped);
+                waveOut2.Dispose();
+                waveOut2 = new WaveOut();
+                soundDevice = config.soundDevice();
+                waveOut2.DeviceNumber = soundDevice;
+                waveOut2.PlaybackStopped += new EventHandler<NAudio.Wave.StoppedEventArgs>(playBackStopped);
+            }
+            waveOut2.Init(audioFile);
+            waveOut2.Volume = trackBarVolume.Value / 100.0f;
+            PlayBeep(500, 15010, volume);
+        }
+
+        private void trackBarVolume_Scroll(object sender, EventArgs e)
+        {
+            axWindowsMediaPlayer2.settings.volume = volume = (ushort)trackBarVolume.Value;
+            if (waveOut2 != null)
+            {
+                waveOut2.Volume = trackBarVolume.Value/100.0f;
+            }
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            //Form form = new Config();
+            //form.Show();
+            config.Show();
+            if (config.WindowState == FormWindowState.Minimized)
+            {
+                config.WindowState = FormWindowState.Normal;
+            }
+            config.BringToFront();
+
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            Properties.Settings.Default.Top = this.Top;
+            Properties.Settings.Default.Left = this.Left;
+            Properties.Settings.Default.Width = this.Width;
+            Properties.Settings.Default.Height = this.Height;
+            Properties.Settings.Default.Volume = volume;
+            Properties.Settings.Default.Save();
+        }
+        /*
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            bool _loop = true;
+            // Check if the stream has been set to loop
+            if (_loop)
+            {
+                // Looping code taken from NAudio Demo
+                int read = 0;
+                while (read < count)
+                {
+                    int required = count - read;
+                    int readThisTime = channelStream.Read(buffer, offset + read, required);
+                    if (readThisTime < required)
+                    {
+                        channelSteam.Position = 0;
+                    }
+
+                    if (channelSteam.Position >= channelSteam.Length)
+                    {
+                        channelSteam.Position = 0;
+                    }
+                    read += readThisTime;
+                }
+                return read;
+            }
+            else
+            {
+                // Normal read code, sample has not been set to loop
+                return channelSteam.Read(buffer, offset, count);
+            }
+        }
+         * */
+
+    }
+
+    public class Win32_SoundDevice
+    {
+        public ushort? Availability;
+        public string Caption;
+        public uint? ConfigManagerErrorCode;
+        public bool? ConfigManagerUserConfig;
+        public string CreationClassName;
+        public string Description;
+        public string DeviceID;
+        public ushort? DMABufferSize;
+        public bool? ErrorCleared;
+        public string ErrorDescription;
+        public DateTime? InstallDate;
+        public uint? LastErrorCode;
+        public string Manufacturer;
+        public uint? MPU401Address;
+        public string Name;
+        public string PNPDeviceID;
+        public ushort[] PowerManagementCapabilities;
+        public bool? PowerManagementSupported;
+        public string ProductName;
+        public string Status;
+        public ushort? StatusInfo;
+        public string SystemCreationClassName;
+        public string SystemName;
+    }
+ 
+    public class SineWaveProvider32 : WaveProvider32
+    {
+        int sample;
+
+        public SineWaveProvider32()
+        {
+            Frequency = 1000;
+            Amplitude = 0.25f; // let's not hurt our ears           
+        }
+
+        public float Frequency { get; set; }
+        public float Amplitude { get; set; }
+
+        public override int Read(float[] buffer, int offset, int sampleCount)
+        {
+            int sampleRate = WaveFormat.SampleRate;
+            for (int n = 0; n < sampleCount; n++)
+            {
+                buffer[n + offset] = (float)(Amplitude * Math.Sin((2 * Math.PI * sample * Frequency) / sampleRate));
+                sample++;
+                if (sample >= sampleRate) sample = 0;
+            }
+            return sampleCount;
+        }
+    }
+    public abstract class WaveProvider32 : IWaveProvider
+    {
+        private WaveFormat waveFormat;
+
+        public WaveProvider32()
+            : this(44100, 1)
+        {
+        }
+
+        public WaveProvider32(int sampleRate, int channels)
+        {
+            SetWaveFormat(sampleRate, channels);
+        }
+
+        public void SetWaveFormat(int sampleRate, int channels)
+        {
+            this.waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
+        }
+
+        public int Read(byte[] buffer, int offset, int count)
+        {
+            WaveBuffer waveBuffer = new WaveBuffer(buffer);
+            int samplesRequired = count / 4;
+            int samplesRead = Read(waveBuffer.FloatBuffer, offset / 4, samplesRequired);
+            return samplesRead * 4;
+        }
+
+        public abstract int Read(float[] buffer, int offset, int sampleCount);
+
+        public WaveFormat WaveFormat
+        {
+            get { return waveFormat; }
+        }
+    }
+}
